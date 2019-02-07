@@ -15,7 +15,7 @@ def get_time_spent(users):
     
 ```
 
-This code works, but you're concerned about the time it takes, since the list of `users` and `user_session` is very large. You remember threads and know that this code will run on an 8-core machine, so you decide to split up the `users` list into 8 chunks and spin up 8 different threads. You quickly conclude that your code will now run about 8x faster, save for any overhead taken up in chunking the list and thread management - you don't have to worry about things like locking or concurrency since each thread is working on its own component of the data. 
+This code works, but you're concerned about the time it takes, since the list of `users` and `user_session` is very large. You remember threads and know that this code will run on an 8-core machine, so you decide to split up the `users` list into 8 chunks and spin up 8 different threads. You quickly conclude that your code will now run about 8x faster, save for any overhead taken up in chunking the list and thread management - you don't have to worry about things like locking since each thread is working on its own component of the data. 
 
 All you have to do is create the threads, and tell each one to run the above `get_time_spent` function on their distinct list of `users`:
 
@@ -38,7 +38,7 @@ What the hell is that, and why does it even exist in Python?
 
 #### What does the GIL do?
 
-Simply put, the GIL is a lock around the interpreter. Any thread wishing to execute Python bytecode (i.e., run it through the interpreter) must hold the GIL in order to do so. This means that at most one thread can be executing Python bytecode at any given moment. This effectively serializes portions of multithreaded programs where each thread is executing bytecode. To allow other threads to run, the thread holding the GIL releases it periodically - both voluntarily when it no longer needs it and involuntarily after a certain interval.
+Simply put, the GIL is a lock around the interpreter. Any thread wishing to execute Python bytecode (i.e., run it through the interpreter) must hold the GIL in order to do so. This means that at most one thread can be executing Python bytecode at any given moment. This effectively serializes portions of multithreaded programs where each thread is executing Python bytecode. To allow other threads to run, the thread holding the GIL releases it periodically - both voluntarily when it no longer needs it and involuntarily after a certain interval.
 
 #### Why does Python have a GIL?
 
@@ -72,9 +72,9 @@ def run_sequential():
 	count(10000000)
 ```
 
-The `report_time` decorator is a simple decorator that uses the `time` module to report how long the function took to execute. Running this script 10 times and averaging the result gave me an average of 1.53 seconds for sequential execution, and 1.57 seconds for threaded execution - meaning that despite having a 4-core machine, threading here did not help at all, and in fact marginally worsened performance.
+The `report_time` [decorator](https://github.com/rohan-varma/python-gil/blob/master/time_decorator.py) is a simple decorator that uses the `time` module to report how long the function took to execute. Running this script 10 times and averaging the result gave me an average of 1.53 seconds for sequential execution, and 1.57 seconds for threaded execution (see [results](https://github.com/rohan-varma/python-gil/blob/master/output.txt)) - meaning that despite having a 4-core machine, threading here did not help at all, and in fact marginally worsened performance.
 
-Now let's consider two I/O bound threads instead. The following code runs the `select` function on empty lists of file descriptors, and times out after 2 seconds:
+Now let's consider two I/O bound threads instead. The following [code](https://github.com/rohan-varma/python-gil/blob/master/gil_test_io_bound.py) runs the `select` function on empty lists of file descriptors, and times out after 2 seconds:
 
 ```
 def run_select():
@@ -110,7 +110,7 @@ The main takeaway is that the GIL only inhibits performence when you have severa
 
 #### Working around Python's GIL
 
-There are still a few things that we can do to potentially optimize performance of CPU-bound Python code across multiple threads, despite the GIL. The first thing to consider is using the `Process` module. `Process` has an API similar to that of `thread`, but it spawns an entirely separate process to run your function. The good news is that the new process has its own interpreter, so you can take advantage of multiple cores on your machine. Porting the above threaded code to use `Process` shows the expected ~2x performance gain. However, processes are much heavier than threads, which brings in efficiency concerns if you're creating a nontrivial number of separate processes. In addition, there's more overhead involved in using IPC mechanisms rather than simply communicating with shared variables with threads.
+There are still a few things that we can do to potentially optimize performance of CPU-bound Python code across multiple threads, despite the GIL. The first thing to consider is using the `Process` module. `Process` has an API similar to that of `thread`, but it spawns an entirely separate process to run your function. The good news is that the new process has its own interpreter, so you can take advantage of multiple cores on your machine. [Porting the above threaded code](https://github.com/rohan-varma/python-gil/blob/master/gil_test_multiprocessing.py) to use `Process` shows the expected ~2x performance gain. However, processes are much heavier than threads, which brings in efficiency concerns if you're creating a nontrivial number of separate processes. In addition, there's more overhead involved in using IPC mechanisms rather than simply communicating with shared variables with threads.
 
 As a more involved task, it may be worth considering porting your CPU-bound code to C, and then writing a C extension to bridge your Python code to the C code. This can provide significant performance advantages, and several scientific computing libraries such as `numpy` and `hashlib` release the GIL in their C extensions. 
 
@@ -128,32 +128,37 @@ Importantly, it will also [wait for a signal](https://github.com/python/cpython/
 
 ![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/gil_battle.png)
 
-​										The GIL battle ([source](http://www.dabeaz.com/python/NewGIL.pdf))
+​									The GIL battle ([source](http://www.dabeaz.com/python/NewGIL.pdf))
 
-This would frequently happen for CPU-bound threads left running on a core in Python 2, and I/O bound threads would be starved, and was a major reason why the GIL was revamped in Python 3. [These slides](http://www.dabeaz.com/python/GIL.pdf) have some more details about the Python 2 GIL.
+This would frequently happen for CPU-bound threads left running on a core in Python 2. This could result in I/O bound threads being starved and lots of extra signalling on condition variables, reducing performance. [These slides](http://www.dabeaz.com/python/GIL.pdf) have some more details about the Python 2 GIL.
 
-There's one important subtelty in the case of multiple threads. Since Python doesn't have its own thread scheduling and wraps POSIX threads, scheduling of threads is left up to the OS. Therefore, when multiple threads are competing to run, the thread that issued the GIL `drop_request` may not actually be the thread that acquires the GIL (since a context switch could occur, another waiting thread could see that the GIL is available, and acquire it). [These slides](http://www.dabeaz.com/python/NewGIL.pdf) have some more details about this.
+There's one important subtelty in the case of multiple threads. Since Python doesn't have its own thread scheduling and wraps POSIX/Windows threads, scheduling of threads is left up to the OS. Therefore, when multiple threads are competing to run, the thread that issued the GIL `drop_request` may not actually be the thread that acquires the GIL (since a context switch could occur, another waiting thread could see that the GIL is available, and acquire it). [These slides](http://www.dabeaz.com/python/NewGIL.pdf) have some more details about this.
 
 
 
 ![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/new_gil_multiple_threads.png)
 
-​								GIL behavior with multiple threads ([source](http://www.dabeaz.com/python/NewGIL.pdf))
+​							GIL behavior with multiple threads ([source](http://www.dabeaz.com/python/NewGIL.pdf))
 
-What could happen is that the thread that was unable to acquire the GIL, but still timed out on waiting for it, could continue to issue the `drop_request` and attempt to re-acquire the GIL. This would essentially be like a spin lock - the thread would keep polling for the GIL and demanding for it to be released, using up CPU to accomplish nothing. 
+What could (but doesn't) happen is that the thread that was unable to acquire the GIL, but still timed out on waiting for it, could continue to issue the `drop_request` and attempt to re-acquire the GIL. This would essentially be like a spin lock - the thread would keep polling for the GIL and demanding for it to be released, using up CPU to accomplish nothing. 
 
-Instead, on a time out, a check is also done to see if the GIL has switched in that time interval (i.e. to another thread). If so, then this thread simply goes to sleep waiting for the GIL again. This dramatically reduces GIL contention, compared to Python 2. 
+Instead, on a time out, a check is also done to see if the GIL has switched in that time interval (i.e. to another thread). If so, then this thread simply goes to sleep waiting for the GIL again. While this does in a sense reduce "fairness" (in the sense that the thread that requested the GIL should get it next), it also dramatically reduces GIL contention, compared to Python 2, and is somewhat of a necessary tradeoff since Python doesn't control when its threads run. 
 
-One criticism about the new GIL relates to the above point of the "most deserving" thread (i.e. the thread that sent the `drop_request`) getting the GIL. This is largely because thread scheduling is entirely up to the OS, but also has some repercussions for I/O operations that complete very quickly. Since any I/O operation will release the GIL, CPU-bound threads will restart and use their entire time slice before yielding back, and the I/O bound thread has to go through the entire timeout process to re-acquire the GIL. This can create somewhat of a convoy effect of I/O bound threads all queueing up to contend for the GIL:
+One criticism about the new GIL relates to the above point of the "most deserving" thread (i.e. the thread that sent the `drop_request`) getting the GIL. This is largely because thread scheduling is entirely up to the OS, but also has some repercussions for I/O operations that complete very quickly. Since any I/O operation will release the GIL, CPU-bound threads will restart and use their entire time slice before yielding back, and the I/O bound thread has to go through the entire timeout process to re-acquire the GIL. This can create somewhat of a convoy effect of quick-running I/O operations having to queue up to acquire the GIL:
 
+![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/newgil_convoy.png)
 
+​							Convoy effect with the new GIL ([source](https://www.dabeaz.com/python/UnderstandingGIL.pdf))
 
 #### Summary
 
 The GIL is an interesting part of Python, and it's cool to see the different tradeoffs and optimizations that were done in both Python 2 and Python 3 to improve performance as it relates to the GIL. The seemingly small changes to Python 3's GIL (such as the time-based, as opposed to tick interval and reduction of GIL contention) emphasizes just how important and nuanced issues such as lock contention and thread switching are, and how hard they are to get right.
 
-
-
 ### Sources
 
 1. http://www.dabeaz.com/python/NewGIL.pdf
+2. http://www.dabeaz.com/python/GIL.pdf
+3. https://www.dabeaz.com/python/UnderstandingGIL.pdf
+4. https://opensource.com/article/17/4/grok-gil
+5. https://realpython.com/python-gil/
+6. https://wiki.python.org/moin/GlobalInterpreterLock
