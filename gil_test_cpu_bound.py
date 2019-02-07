@@ -22,9 +22,17 @@ def run_sequential():
 
 
 
-_, seq_time = run_threaded()
-_, thread_time = run_threaded()
-print(seq_time, thread_time)
+seq_times, thread_times = [], []
+for i in range(10):
+	_, thread_time = run_threaded()
+	_, seq_time = run_sequential()
+	print(f'{seq_time},{thread_time}')
+	seq_times.append(seq_time)
+	thread_times.append(thread_time)
+
+print(f'{sum(seq_times)/len(seq_times)} sequentially, {sum(thread_times)/len(thread_times)} in threaded implementation')
+
+
 
 
 

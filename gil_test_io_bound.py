@@ -14,7 +14,13 @@ def run_threaded():
 	t1.join()
 	t2.join()
 
+@report_time
+def run_sequential():
+	run_select()
+	run_select()
 
 
-_, time_taken = run_threaded()
-print(time_taken)
+
+_, threaded_time = run_threaded()
+_, seq_time = run_sequential()
+print(f'{threaded_time} with threading, {seq_time} sequentially')
