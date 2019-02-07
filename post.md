@@ -124,7 +124,11 @@ The running thread will finish the instruction that it's on, drop the GIL, and [
 
 Importantly, it will also [wait for a signal](https://github.com/python/cpython/blob/27e2d1f21975dfb8c0ddcb192fa0f45a51b7977e/Python/ceval_gil.h#L173-L187) that another thread was able to get the GIL and run. This is done by checking if the last holder of the GIL was the thread itself, and if so, resetting the GIL drop request and waiting on a condition variable that signals that the GIL has been switched.
 
- This wasn't the case in Python 2, where a thread that just dropped the GIL could potentially compete for it again. This would often result in starvation of certain threads, due to how the OS would schedule these threads. For example, if you had two cores, then the thread dropping the GIL (let's call this t1) could still be running on one core, and the thread attempting to acquire the GIL (let's call this t2) could be scheduled on the 2nd core. What could happen is that since t1 is still running, it could re-acquire the GIL before t2 even gets a chance to wake up and see that it can acquire the GIL, so t2 will continue to block since it wasn't able to acquire the GIL. This would frequently happen for CPU-bound threads left running on a core in Python 2, and I/O bound threads would be starved, and was a major reason why the GIL was revamped in Python 3. [These slides](http://www.dabeaz.com/python/GIL.pdf) have some more details about the Python 2 GIL.
+ This wasn't the case in Python 2, where a thread that just dropped the GIL could potentially compete for it again. This would often result in starvation of certain threads, due to how the OS would schedule these threads. For example, if you had two cores, then the thread dropping the GIL (let's call this t1) could still be running on one core, and the thread attempting to acquire the GIL (let's call this t2) could be scheduled on the 2nd core. What could happen is that since t1 is still running, it could re-acquire the GIL before t2 even gets a chance to wake up and see that it can acquire the GIL, so t2 will continue to block since it wasn't able to acquire the GIL, and then wake up and try again repeatedly. This would result in something dubbed the GIL battle [1]:
+
+![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/gil_battle.png)
+
+This would frequently happen for CPU-bound threads left running on a core in Python 2, and I/O bound threads would be starved, and was a major reason why the GIL was revamped in Python 3. [These slides](http://www.dabeaz.com/python/GIL.pdf) have some more details about the Python 2 GIL.
 
 There's one important subtelty in the case of multiple threads. Since Python doesn't have its own thread scheduling and wraps POSIX threads, scheduling of threads is left up to the OS. Therefore, when multiple threads are competing to run, the thread that issued the GIL `drop_request` may not actually be the thread that acquires the GIL (since a context switch could occur, another waiting thread could see that the GIL is available, and acquire it). [These slides](http://www.dabeaz.com/python/NewGIL.pdf) have some more details about this.
 
@@ -135,3 +139,9 @@ Instead, on a time out, a check is also done to see if the GIL has switched in t
 #### Summary
 
 The GIL is an interesting part of Python, and it's cool to see the different tradeoffs and optimizations that were done in both Python 2 and Python 3 to improve performance as it relates to the GIL. The seemingly small changes to Python 3's GIL (such as the time-based, as opposed to tick interval and reduction of GIL contention) emphasizes just how important and nuanced issues such as lock contention and thread switching are, and how hard they are to get right.
+
+
+
+### Sources
+
+1. http://www.dabeaz.com/python/NewGIL.pdf
