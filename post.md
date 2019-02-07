@@ -124,17 +124,29 @@ The running thread will finish the instruction that it's on, drop the GIL, and [
 
 Importantly, it will also [wait for a signal](https://github.com/python/cpython/blob/27e2d1f21975dfb8c0ddcb192fa0f45a51b7977e/Python/ceval_gil.h#L173-L187) that another thread was able to get the GIL and run. This is done by checking if the last holder of the GIL was the thread itself, and if so, resetting the GIL drop request and waiting on a condition variable that signals that the GIL has been switched.
 
- This wasn't the case in Python 2, where a thread that just dropped the GIL could potentially compete for it again. This would often result in starvation of certain threads, due to how the OS would schedule these threads. For example, if you had two cores, then the thread dropping the GIL (let's call this t1) could still be running on one core, and the thread attempting to acquire the GIL (let's call this t2) could be scheduled on the 2nd core. What could happen is that since t1 is still running, it could re-acquire the GIL before t2 even gets a chance to wake up and see that it can acquire the GIL, so t2 will continue to block since it wasn't able to acquire the GIL, and then wake up and try again repeatedly. This would result in something dubbed the GIL battle [1]:
+ This wasn't the case in Python 2, where a thread that just dropped the GIL could potentially compete for it again. This would often result in starvation of certain threads, due to how the OS would schedule these threads. For example, if you had two cores, then the thread dropping the GIL (let's call this t1) could still be running on one core, and the thread attempting to acquire the GIL (let's call this t2) could be scheduled on the 2nd core. What could happen is that since t1 is still running, it could re-acquire the GIL before t2 even gets a chance to wake up and see that it can acquire the GIL, so t2 will continue to block since it wasn't able to acquire the GIL, and then wake up and try again repeatedly. This would result in something dubbed the GIL battle:
 
 ![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/gil_battle.png)
+
+​										The GIL battle ([source](http://www.dabeaz.com/python/NewGIL.pdf))
 
 This would frequently happen for CPU-bound threads left running on a core in Python 2, and I/O bound threads would be starved, and was a major reason why the GIL was revamped in Python 3. [These slides](http://www.dabeaz.com/python/GIL.pdf) have some more details about the Python 2 GIL.
 
 There's one important subtelty in the case of multiple threads. Since Python doesn't have its own thread scheduling and wraps POSIX threads, scheduling of threads is left up to the OS. Therefore, when multiple threads are competing to run, the thread that issued the GIL `drop_request` may not actually be the thread that acquires the GIL (since a context switch could occur, another waiting thread could see that the GIL is available, and acquire it). [These slides](http://www.dabeaz.com/python/NewGIL.pdf) have some more details about this.
 
+
+
+![](https://raw.githubusercontent.com/rohan-varma/python-gil/master/new_gil_multiple_threads.png)
+
+​								GIL behavior with multiple threads ([source](http://www.dabeaz.com/python/NewGIL.pdf))
+
 What could happen is that the thread that was unable to acquire the GIL, but still timed out on waiting for it, could continue to issue the `drop_request` and attempt to re-acquire the GIL. This would essentially be like a spin lock - the thread would keep polling for the GIL and demanding for it to be released, using up CPU to accomplish nothing. 
 
 Instead, on a time out, a check is also done to see if the GIL has switched in that time interval (i.e. to another thread). If so, then this thread simply goes to sleep waiting for the GIL again. This dramatically reduces GIL contention, compared to Python 2. 
+
+One criticism about the new GIL relates to the above point of the "most deserving" thread (i.e. the thread that sent the `drop_request`) getting the GIL. This is largely because thread scheduling is entirely up to the OS, but also has some repercussions for I/O operations that complete very quickly. Since any I/O operation will release the GIL, CPU-bound threads will restart and use their entire time slice before yielding back, and the I/O bound thread has to go through the entire timeout process to re-acquire the GIL. This can create somewhat of a convoy effect of I/O bound threads all queueing up to contend for the GIL:
+
+
 
 #### Summary
 
